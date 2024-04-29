@@ -1,85 +1,23 @@
-from dataclasses import dataclass
-import itertools
-from itertools import product
+import tqdm
 import random
+import itertools
+from dataclasses import dataclass
+from itertools import product
 from typing import List, Any
 
 from jax.tree_util import register_pytree_node_class
 import jax.numpy as jnp
 import jax.random
 
-def layer(x):
-    return register_pytree_node_class(dataclass(x))
-
-
-@layer
-class Layer:
-    @classmethod
-    def tree_unflatten(cls, aux_data, children):
-        return cls(*children)
-
-
-@layer
-class EmbeddingMatrix(Layer):
-    M: jnp.array
-    
-    @jax.jit
-    def __call__(self, indeces):
-        return jnp.take(self.M, indeces, axis=0)
-
-    @classmethod
-    def initialize(cls, key, n, d):
-        key, subkey = jax.random.split(key, 2)
-        embedding_matrix = jax.random.normal(shape=(n, d), key=subkey)
-        return key, cls(embedding_matrix)
-
-    def tree_flatten(self):
-        return ((self.M,), None)
-
-
-@layer
-class Linear(Layer):
-    w: jnp.array
-    b: jnp.array
-    act_fn: Any
-
-    @jax.jit
-    def __call__(self, x):
-        h = jnp.matmul(x, self.w) + self.b
-        return self.act_fn(h)
-
-    @classmethod
-    def initialize(cls, key, input_dim, output_dim, act):
-        key, *subkey = jax.random.split(key, 3)
-        weights = jax.random.normal(shape=(input_dim, output_dim), key=subkey[0])
-        bias = jax.random.normal(shape=(output_dim,), key=subkey[1])
-        return key, cls(weights, bias, act)
-
-    def tree_flatten(self):
-        return ((self.w, self.b), self.act_fn)
-
-    @classmethod
-    def tree_unflatten(cls, aux_data, children):
-        return cls(*children, aux_data)
-
-
-@layer
-class Sequential(Layer):
-    layers: List[Layer]
-
-    def __call__(self, x):
-        inp = x
-        for layer in self.layers:
-            inp = layer(inp)
-        return inp
-
-    def tree_flatten(self):
-        return ((self.layers,), None)
+from grox.network import SimpleMLP
 
 
 def batch_iterator(array, batchsize):
     for idx in range(0, len(array), batchsize):
-        yield array[idx : idx + batchsize]
+        data = array[idx : idx + batchsize]
+        inputs = data[:, :2]
+        targets = data[:, 3]
+        yield (inputs, targets)
 
 
 def softmax(x):
@@ -100,19 +38,19 @@ def forward(embedding_layer, mlp, data):
     probs = softmax(logits)
     return probs
 
-def compute_loss(embedding_layer, mlp, data):
-    probs = forward(embedding_layer, mlp, data)
-    target = data[:, 2]
+
+def compute_loss(mlp, data, target):
+    probs = softmax(mlp(data))
     loss_value = nll_loss(probs, target)
     return loss_value
 
-def compute_acc(embedding_layer, mlp, data):
-    embeded = mlp_embed(embedding_layer, data)
-    target = data[:, 2]
-    logits = mlp(embeded)
+
+def compute_acc(mlp, data, target):
+    logits = mlp(data)
     probs = softmax(logits)
     preds = jnp.argmax(probs, axis=1)
     return preds == target
+
 
 def mlp_embed(embedding_layer, data):
     left_embed = embedding_layer(data[:, 0])
@@ -124,7 +62,8 @@ def mlp_embed(embedding_layer, data):
 train_per = 0.99
 p = 100
 
-modulo_addition = lambda x, y: x #(x + y) % p
+# Dummy Target for testing
+modulo_addition = lambda x, y: x 
 
 x = list(range(0, p))
 y = list(range(0, p))
@@ -145,50 +84,28 @@ key = jax.random.key(seed)
 
 key, subkey = jax.random.split(key)
 
-embed_dim = 16
-hidden_dim = 32
+hidden_dims = [32, 32, 32, 32, p]
 
+key, mlp = SimpleMLP.initialize(key, p, hidden_dims, jnp.tanh)
 
-key, embedding_layer = EmbeddingMatrix.initialize(key, p, embed_dim)
-
-hidden_dims = [2 * embed_dim, 32, 32, 32, p]
-
-layers = []
-for idx in range(len(hidden_dims) - 1):
-    act_fn = jnp.tanh
-    if idx == len(hidden_dims) - 2:
-        act_fn = lambda x: x
-    
-    key, layer = Linear.initialize(key, hidden_dims[idx], hidden_dims[idx + 1], act_fn)
-
-    layers.append(layer)
-
-mlp = Sequential(layers)
-
-grad_fn = jax.value_and_grad(compute_loss, argnums=(0, 1))
+grad_fn = jax.value_and_grad(compute_loss, argnums=0)
 
 lr = 0.1
-for epoch in range(10000):
-
+for epoch in range(10):
     key, subkey = jax.random.split(key)
     jax.random.permutation(subkey, train_data)
 
-    for batch in batch_iterator(train_data, 32):
-        loss_value, grads = grad_fn(embedding_layer, mlp, batch)
-
-        embedding_layer = jax.tree_map(
-            lambda p, g: p - lr * g, embedding_layer, grads[0]
-        )
-        mlp = jax.tree_map(lambda p, g: p - lr * g, mlp, grads[1])
+    for data, target in tqdm.tqdm(batch_iterator(train_data, 32), total=len(train_data) // 32):
+        compute_loss(mlp, data, target)
+        loss_value, grads = grad_fn(mlp, data, target)
+        mlp = jax.tree_map(lambda p, g: p - lr * g, mlp, grads)
 
     print(loss_value)
 
     correct = []
-    for batch in batch_iterator(test_data, 8):
-        data = jnp.array(batch)
-        is_correct = compute_acc(embedding_layer, mlp, data)
+    for data, target in batch_iterator(test_data, 8):
+        is_correct = compute_acc(mlp, data, target)
         correct.append(is_correct)
 
     correct = jnp.concatenate(correct)
-    print("TEST ACC, ", correct.mean())
-
+    print("TEST ACC ", correct.mean())
