@@ -1,4 +1,3 @@
-
 from dataclasses import dataclass
 from typing import Any, List
 
@@ -6,8 +5,10 @@ import jax.random
 import jax.numpy as jnp
 from jax.tree_util import register_pytree_node_class
 
+
 def layer(x):
     return register_pytree_node_class(dataclass(x))
+
 
 @layer
 class Layer:
@@ -73,28 +74,28 @@ class Sequential(Layer):
     def tree_flatten(self):
         return ((self.layers,), None)
 
+
 @layer
 class SimpleMLP(Layer):
-
     embedding: EmbeddingMatrix
     ffn_layers: Sequential
 
     @classmethod
     def initialize(cls, key, num_tokens, dim_list, act_fn):
-        
         assert dim_list[0] % 2 == 0
 
         key, embed_layer = EmbeddingMatrix.initialize(key, num_tokens, dim_list[0] // 2)
 
         layers = []
         for idx in range(len(dim_list) - 1):
-
             if idx == len(dim_list) - 2:
                 act_fn = lambda x: x
 
-            key, layer = Linear.initialize(key, dim_list[idx], dim_list[idx + 1], act_fn)
+            key, layer = Linear.initialize(
+                key, dim_list[idx], dim_list[idx + 1], act_fn
+            )
             layers.append(layer)
-        
+
         mlp = Sequential(layers)
         return key, cls(embed_layer, mlp)
 
