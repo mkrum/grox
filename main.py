@@ -4,6 +4,8 @@ import itertools
 from dataclasses import dataclass
 from itertools import product
 from typing import List, Any, Iterator
+import numpy as np
+from collections import deque
 
 from jax.tree_util import register_pytree_node_class
 import jax.numpy as jnp
@@ -15,7 +17,12 @@ from grox.network import SimpleMLP
 
 
 def batch_iterator(array: ArrayLike, batchsize: int) -> Iterator[ArrayLike]:
-    for idx in range(0, len(array), batchsize):
+
+    total = len(array)
+    steps = total // batchsize
+    actual_total = steps * batchsize
+
+    for idx in range(0, actual_total, batchsize):
         data = array[idx : idx + batchsize]
         inputs = data[:, :2]
         targets = data[:, 3]
@@ -77,18 +84,26 @@ key, mlp = SimpleMLP.initialize(key, max_value, hidden_dims, jnp.tanh)
 grad_fn = jax.value_and_grad(compute_loss, argnums=0)
 
 lr = 0.1
+
+loss_hist = deque(maxlen=10)
+
 for epoch in range(10):
+
     key, subkey = jax.random.split(key)
     jax.random.permutation(subkey, train_data)
 
-    for data, target in tqdm.tqdm(
+    progress_bar = tqdm.tqdm(
         batch_iterator(train_data, 32), total=len(train_data) // 32
-    ):
+    )
+
+    for data, target in progress_bar:
         compute_loss(mlp, data, target)
         loss_value, grads = grad_fn(mlp, data, target)
         mlp = jax.tree_map(lambda p, g: p - lr * g, mlp, grads)
 
-    print(loss_value)
+        loss_hist.append(loss_value)
+
+        progress_bar.set_description(f"Loss: {np.mean(loss_hist):.2f}")
 
     correct = []
     for data, target in batch_iterator(test_data, 8):
@@ -96,4 +111,5 @@ for epoch in range(10):
         correct.append(is_correct)
 
     correct = jnp.concatenate(correct)
-    print("TEST ACC ", correct.mean())
+    acc = 100.0 * correct.mean()
+    print(f"Epoch {epoch + 1} Test Acc: {acc:.2f}%")
