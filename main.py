@@ -14,6 +14,7 @@ from jax import Array
 from jax.typing import ArrayLike
 
 from grox.network import SimpleMLP
+from grox.nn import softmax
 
 
 def batch_iterator(array: ArrayLike, batchsize: int) -> Iterator[ArrayLike]:
@@ -27,12 +28,6 @@ def batch_iterator(array: ArrayLike, batchsize: int) -> Iterator[ArrayLike]:
         inputs = data[:, :2]
         targets = data[:, 3]
         yield (inputs, targets)
-
-
-def softmax(x: ArrayLike) -> Array:
-    vals = jnp.exp(x)
-    totals = jnp.sum(vals, axis=-1, keepdims=True)
-    return vals / totals
 
 
 def nll_loss(probs: ArrayLike, target: ArrayLike) -> Array:
