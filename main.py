@@ -18,7 +18,6 @@ from grox.nn import softmax
 
 
 def batch_iterator(array: ArrayLike, batchsize: int) -> Iterator[ArrayLike]:
-
     total = len(array)
     steps = total // batchsize
     actual_total = steps * batchsize
@@ -83,7 +82,6 @@ lr = 0.1
 loss_hist = deque(maxlen=10)
 
 for epoch in range(10):
-
     key, subkey = jax.random.split(key)
     jax.random.permutation(subkey, train_data)
 

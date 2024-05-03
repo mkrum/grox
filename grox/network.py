@@ -1,9 +1,43 @@
 from dataclasses import dataclass
 from typing import Any, List
+import numpy as np
 
 import jax.random
 import jax.numpy as jnp
 from jax.tree_util import register_pytree_node_class
+
+from grox.nn import affine
+
+
+def xavier_init(key, shape):
+    assert len(shape) == 2
+
+    f_in = shape[0]
+    f_out = shape[1]
+
+    range_limit = 6 / np.sqrt(f_in + f_out)
+
+    key, subkey = jax.random.split(key, 2)
+
+    return jax.random.uniform(
+        key=subkey, shape=shape, minval=-range_limit, maxval=range_limit
+    )
+
+
+def kaiming_init(key, shape):
+    assert len(shape) == 2
+
+    f_in = shape[0]
+    f_out = shape[1]
+
+    multiplier = np.sqrt(2) / f_in
+
+    key, subkey = jax.random.split(key, 2)
+    weights = jax.random.normal(key=subkey)
+
+    final_weights = weights * multiplier
+
+    return final_weights
 
 
 def layer(x):
@@ -15,6 +49,10 @@ class Layer:
     @classmethod
     def tree_unflatten(cls, aux_data, children):
         return cls(*children)
+
+    @classmethod
+    def initialize(cls, key, init_fn, *args, **kwargs):
+        ...
 
 
 @layer
@@ -28,7 +66,7 @@ class EmbeddingMatrix(Layer):
     @classmethod
     def initialize(cls, key, n, d):
         key, subkey = jax.random.split(key, 2)
-        embedding_matrix = jax.random.normal(shape=(n, d), key=subkey)
+        embedding_matrix = jax.random.normal(subkey, (n, d))
         return key, cls(embedding_matrix)
 
     def tree_flatten(self):
@@ -43,14 +81,27 @@ class Linear(Layer):
 
     @jax.jit
     def __call__(self, x):
-        h = jnp.matmul(x, self.w) + self.b
+        h = affine(x, self.w, self.b)
         return self.act_fn(h)
 
     @classmethod
-    def initialize(cls, key, input_dim, output_dim, act):
-        key, *subkey = jax.random.split(key, 3)
-        weights = jax.random.normal(shape=(input_dim, output_dim), key=subkey[0])
-        bias = jax.random.normal(shape=(output_dim,), key=subkey[1])
+    def initialize(cls, key, input_dim, output_dim, act, init_type="normal"):
+        init_fn = None
+
+        if init_type == "normal":
+            init_fn = jax.random.normal
+        elif init_type == "xavier":
+            init_fn = xavier_init
+        elif init_type == "kaiming":
+            init_fn = xavier_init
+        else:
+            raise ValueError(
+                f"Intializatoin {init_type} not one of: normal, xavier, kaiming"
+            )
+
+        key, subkey = jax.random.split(key, 2)
+        weights = init_fn(subkey, shape=(input_dim, output_dim))
+        bias = jnp.zeros(shape=(output_dim,))
         return key, cls(weights, bias, act)
 
     def tree_flatten(self):
@@ -92,7 +143,7 @@ class SimpleMLP(Layer):
                 act_fn = lambda x: x
 
             key, layer = Linear.initialize(
-                key, dim_list[idx], dim_list[idx + 1], act_fn
+                key, dim_list[idx], dim_list[idx + 1], act_fn, init_type="kaiming"
             )
             layers.append(layer)
 
