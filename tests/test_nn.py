@@ -6,13 +6,19 @@ from grox.nn import softmax, affine, attention, layer_norm
 import torch
 import torch.nn.functional as F
 
+ATOL=1e-6
+
 
 def test_softmax():
-    key = jax.random.key(123)
-    input_vals = jax.random.normal(shape=(10, 2), key=key)
-    output = softmax(input_vals)
-    sums = jnp.sum(output, axis=-1)
-    assert (sums - 1.0).mean() < 1e-6
+    X = np.random.normal(size=(10, 2))
+
+    X_torch = torch.tensor(X, dtype=torch.float32)
+    output_torch = F.softmax(X_torch, dim=-1)
+
+    X_jax = jnp.array(X, dtype='float32')
+    output_grox = softmax(X_jax)
+
+    assert np.allclose(output_grox, output_torch, atol=ATOL)
 
 
 def test_affine():
@@ -28,22 +34,24 @@ def test_affine():
 
 
 def test_attention():
-    key = jax.random.key(123)
 
-    Q = jax.random.normal(shape=(32, 8), key=key)
-    K = jax.random.normal(shape=(32, 8), key=key)
-    V = jax.random.normal(shape=(32, 16), key=key)
+    Q = np.random.normal(size=(32, 8))
+    K = np.random.normal(size=(32, 8))
+    V = np.random.normal(size=(32, 16))
 
-    output = attention(Q, K, V)
-    assert output.shape == (32, 16)
-    
-    # multi-headed
-    Q = jax.random.normal(shape=(32, 8, 4), key=key)
-    K = jax.random.normal(shape=(32, 8, 4), key=key)
-    V = jax.random.normal(shape=(32, 8, 2), key=key)
+    Q_torch = torch.tensor(Q, dtype=torch.float32)
+    K_torch = torch.tensor(K, dtype=torch.float32)
+    V_torch = torch.tensor(V, dtype=torch.float32)
 
-    output = attention(Q, K, V)
-    assert output.shape == (32, 8, 2)
+    output_torch = F.scaled_dot_product_attention(Q_torch, K_torch, V_torch, scale=1/np.sqrt(Q.shape[1]))
+
+    Q_jax = jnp.array(Q, dtype='float32')
+    K_jax = jnp.array(K, dtype='float32')
+    V_jax = jnp.array(V, dtype='float32')
+
+    output_grox = attention(Q_jax, K_jax, V_jax)
+
+    assert np.allclose(output_grox, output_torch, atol=ATOL)
 
 def test_layer_norm():
 
@@ -65,4 +73,4 @@ def test_layer_norm():
     out_grox = np.array(out_grox)
     out_torch = np.array(out_torch)
 
-    assert np.allclose(out_grox, out_torch, atol=1e-6)
+    assert np.allclose(out_grox, out_torch, atol=ATOL)
