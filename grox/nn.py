@@ -20,6 +20,18 @@ def affine(x: ArrayLike, W: ArrayLike, b: ArrayLike) -> Array:
 
 @jax.jit
 def attention(Q: ArrayLike, K: ArrayLike, V: ArrayLike) -> Array:
-    A = jnp.matmul(Q, K.T) / np.sqrt(Q.shape[1])
+    # Handle multi-headed
+    K_T = jnp.moveaxis(K, -2, -1)
+    A = jnp.matmul(Q, K_T) / np.sqrt(Q.shape[1])
     weights = softmax(A)
     return jnp.matmul(weights, V)
+
+@jax.jit
+def layer_norm(X: ArrayLike, gain: ArrayLike, bias: ArrayLike, eps: float = 1e-5) -> Array:
+    
+    X_mean = jnp.mean(X, axis=-1, keepdims=True)
+    X_var = jnp.var(X, axis=-1, keepdims=True)
+
+    X_norm = (X - X_mean) / jnp.sqrt(X_var + eps)
+    transformed = gain * X_norm + bias
+    return transformed
