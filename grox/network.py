@@ -6,7 +6,7 @@ import jax.random
 import jax.numpy as jnp
 from jax.tree_util import register_pytree_node_class
 
-from grox.nn import attention
+from grox.nn import attention, layer_norm
 
 
 def xavier_init(key, shape):
@@ -121,7 +121,7 @@ class Linear(Layer):
 
     @jax.jit
     def __call__(self, x):
-        h = jnp.matmul(x, self.w)
+        h = jnp.matmul(x, self.w.T)
         return self.act_fn(h)
 
     @classmethod
@@ -217,11 +217,11 @@ class SimpleSelfAttentionBlock(Layer):
 
 @layer
 class LayerNorm(Layer):
-    bias: jnp.array
     gain: jnp.array
+    bias: jnp.array
 
     def __call__(self, x):
-        return layer_norm(x, gain, bias)
+        return layer_norm(x, self.gain, self.bias)
 
     @classmethod
     def initialize(cls, key, input_dim):
