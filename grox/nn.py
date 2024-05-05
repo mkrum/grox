@@ -16,9 +16,9 @@ def softmax(x: ArrayLike) -> Array:
 def attention(Q: ArrayLike, K: ArrayLike, V: ArrayLike) -> Array:
     # Handle multi-headed
     K_T = jnp.moveaxis(K, -2, -1)
-    A = jnp.matmul(Q, K_T) / np.sqrt(Q.shape[1])
+    A = jnp.matmul(Q, K_T) / np.sqrt(Q.shape[-1])
     weights = softmax(A)
-    return jnp.matmul(weights, V)
+    return jnp.matmul(weights, V), weights
 
 
 @jax.jit

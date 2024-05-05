@@ -194,17 +194,15 @@ class SimpleMLP(Layer):
 
 @layer
 class SimpleSelfAttentionBlock(Layer):
-    W_k: Any
-    W_v: Any
-    W_q: Any
+    W_proj: Any
+    out_proj: Any
 
     def __call__(self, x):
-        K = jnp.matmul(x, self.W_k)
-        V = jnp.matmul(x, self.W_v)
-        Q = jnp.matmul(x, self.W_q)
+        X = jnp.matmul(x, self.W_proj.T)
+        Q, K, V = jnp.array_split(X, 3, axis=-1)
+        output, weights = attention(Q, K, V)
 
-        output = attention(Q, K, V)
-        return output
+        return jnp.matmul(output, self.out_proj.T)
 
     @classmethod
     def initialize(cls, key, input_dim):
@@ -212,11 +210,9 @@ class SimpleSelfAttentionBlock(Layer):
 
         init_fn = kaiming_init
 
-        W_k = init_fn(subkeys[0], shape=(input_dim, input_dim))
-        W_v = init_fn(subkeys[1], shape=(input_dim, input_dim))
-        W_q = init_fn(subkeys[1], shape=(input_dim, input_dim))
+        W_proj = init_fn(subkeys[0], shape=(3 * input_dim, input_dim))
 
-        return key, cls(W_k, W_v, W_q)
+        return key, cls(W_proj)
 
 
 @layer
