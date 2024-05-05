@@ -13,22 +13,22 @@ import jax.random
 from jax import Array
 from jax.typing import ArrayLike
 
-from grox.network import SimpleMLP, EmbeddingMatrix, layer
+from grox.network import (
+    SimpleMLP,
+    EmbeddingMatrix,
+    layer,
+    SimpleTransformerBlock,
+    Sequential,
+    Layer,
+    Linear,
+)
 from grox.nn import softmax
 
 
 @layer
 class MLPModel(Layer):
     embedding: EmbeddingMatrix
-    ffn_layers: mlp
-
-    @classmethod
-    def initialize(cls, key, num_tokens, dim_list, act_fn):
-        assert dim_list[0] % 2 == 0
-
-        key, embed_layer = EmbeddingMatrix.initialize(key, num_tokens, dim_list[0] // 2)
-        key, mlp = MLPModel.initialize(key, dim_list, act_fn)
-        return key, cls(embed_layer, mlp)
+    ffn_layers: SimpleMLP
 
     def __call__(self, data):
         left_embed = self.embedding(data[:, 0])
@@ -36,8 +36,50 @@ class MLPModel(Layer):
         embeded = jnp.concatenate([left_embed, right_embed], axis=1)
         return self.ffn_layers(embeded)
 
+    @classmethod
+    def initialize(cls, key, num_tokens, dim_list, act_fn):
+        assert dim_list[0] % 2 == 0
+
+        key, embed_layer = EmbeddingMatrix.initialize(key, num_tokens, dim_list[0] // 2)
+        key, mlp = SimpleMLP.initialize(key, dim_list, act_fn)
+        return key, cls(embed_layer, mlp)
+
     def tree_flatten(self):
         return ((self.embedding, self.ffn_layers), None)
+
+
+@layer
+class TransformerModel(Layer):
+    embedding: EmbeddingMatrix
+    transformer_layers: Sequential
+    output_proj: Linear
+
+    def __call__(self, data):
+        embeded = self.embedding(data)
+        hidden = self.transformer_layers(embeded)
+        final_hidden = hidden[:, -1, :]
+        output = self.output_proj(final_hidden)
+        return output
+
+    @classmethod
+    def initialize(cls, key, num_tokens, embed_dim, n_layers):
+        key, embed_layer = EmbeddingMatrix.initialize(key, num_tokens, embed_dim)
+
+        layers = []
+        for _ in range(n_layers):
+            key, transformer_layer = SimpleTransformerBlock.initialize(
+                key, embed_dim, 2.0
+            )
+            layers.append(transformer_layer)
+
+        transformer = Sequential(layers)
+
+        key, output_proj = Linear.initialize(key, embed_dim, num_tokens, lambda x: x)
+
+        return key, cls(embed_layer, transformer, output_proj)
+
+    def tree_flatten(self):
+        return ((self.embedding, self.transformer_layers, self.output_proj), None)
 
 
 def batch_iterator(array: ArrayLike, batchsize: int) -> Iterator[ArrayLike]:
@@ -54,7 +96,7 @@ def batch_iterator(array: ArrayLike, batchsize: int) -> Iterator[ArrayLike]:
 
 def nll_loss(probs: ArrayLike, target: ArrayLike) -> Array:
     log_probs = jnp.log(probs)
-    ll = jnp.take_along_axis(log_probs, target.reshape(-1, 1), axis=1).mean()
+    ll = jnp.take_along_axis(log_probs, target.reshape(-1, 1), axis=-1).mean()
     return -1.0 * ll
 
 
@@ -86,46 +128,51 @@ def create_dataset(train_percent: float, max_value: int, fn) -> ArrayLike:
     return train_data, test_data
 
 
-max_value = 97
-train_data, test_data = create_dataset(0.99, max_value, lambda x, y: y)
+if __name__ == "__main__":
+    max_value = 97
+    train_data, test_data = create_dataset(0.99, max_value, lambda x, y: x)
 
-seed = 123
-key = jax.random.key(seed)
+    seed = 123
+    key = jax.random.key(seed)
 
-key, subkey = jax.random.split(key)
-
-hidden_dims = [32, 32, 32, 32, max_value]
-
-key, mlp = MLPModel.initialize(key, max_value, hidden_dims, jnp.tanh)
-
-grad_fn = jax.value_and_grad(compute_loss, argnums=0)
-
-lr = 0.1
-
-loss_hist = deque(maxlen=10)
-
-for epoch in range(10):
     key, subkey = jax.random.split(key)
-    jax.random.permutation(subkey, train_data)
 
-    progress_bar = tqdm.tqdm(
-        batch_iterator(train_data, 32), total=len(train_data) // 32
-    )
+    model_type = "transformer"
 
-    for data, target in progress_bar:
-        compute_loss(mlp, data, target)
-        loss_value, grads = grad_fn(mlp, data, target)
-        mlp = jax.tree_map(lambda p, g: p - lr * g, mlp, grads)
+    model = None
+    if model_type == "mlp":
+        hidden_dims = [32, 32, 32, 32, max_value]
+        key, model = MLPModel.initialize(key, max_value, hidden_dims, jnp.tanh)
+    elif model_type == "transformer":
+        key, model = TransformerModel.initialize(key, max_value, 32, 2)
 
-        loss_hist.append(loss_value)
+    grad_fn = jax.value_and_grad(compute_loss, argnums=0)
 
-        progress_bar.set_description(f"Loss: {np.mean(loss_hist):.2f}")
+    lr = 0.1
 
-    correct = []
-    for data, target in batch_iterator(test_data, 8):
-        is_correct = compute_acc(mlp, data, target)
-        correct.append(is_correct)
+    loss_hist = deque(maxlen=10)
 
-    correct = jnp.concatenate(correct)
-    acc = 100.0 * correct.mean()
-    print(f"Epoch {epoch + 1} Test Acc: {acc:.2f}%")
+    for epoch in range(10):
+        key, subkey = jax.random.split(key)
+        jax.random.permutation(subkey, train_data)
+
+        progress_bar = tqdm.tqdm(
+            batch_iterator(train_data, 32), total=len(train_data) // 32
+        )
+
+        for data, target in progress_bar:
+            loss_value, grads = grad_fn(model, data, target)
+            model = jax.tree_map(lambda p, g: p - lr * g, model, grads)
+
+            loss_hist.append(loss_value)
+
+            progress_bar.set_description(f"Loss: {np.mean(loss_hist):.2f}")
+
+        correct = []
+        for data, target in batch_iterator(test_data, 8):
+            is_correct = compute_acc(model, data, target)
+            correct.append(is_correct)
+
+        correct = jnp.concatenate(correct)
+        acc = 100.0 * correct.mean()
+        print(f"Epoch {epoch + 1} Test Acc: {acc:.2f}%")

@@ -33,7 +33,7 @@ def kaiming_init(key, shape):
     multiplier = np.sqrt(2) / f_in
 
     key, subkey = jax.random.split(key, 2)
-    weights = jax.random.normal(key=subkey)
+    weights = jax.random.normal(key=subkey, shape=shape)
 
     final_weights = weights * multiplier
 
@@ -140,7 +140,7 @@ class Linear(Layer):
             )
 
         key, subkey = jax.random.split(key, 2)
-        weights = init_fn(subkey, shape=(input_dim, output_dim))
+        weights = init_fn(subkey, shape=(output_dim, input_dim))
 
         return key, cls(weights, act)
 
@@ -174,13 +174,13 @@ class SimpleMLP(Layer):
         return self.ffn_layers(x)
 
     @classmethod
-    def initialize(cls, key, dim_list, act_fn=jnp.tanh, init_type="kaiming"):
+    def initialize(cls, key, dim_list, act_fn=jnp.tanh, init_type="xavier"):
         layers = []
         for idx in range(len(dim_list) - 1):
             if idx == len(dim_list) - 2:
                 act_fn = lambda x: x
 
-            key, layer = Linear.initialize(
+            key, layer = Affine.initialize(
                 key, dim_list[idx], dim_list[idx + 1], act_fn, init_type=init_type
             )
             layers.append(layer)
@@ -189,7 +189,7 @@ class SimpleMLP(Layer):
         return key, cls(mlp)
 
     def tree_flatten(self):
-        return ((self.ffn_layers), None)
+        return ((self.ffn_layers,), None)
 
 
 @layer
@@ -201,7 +201,6 @@ class SimpleSelfAttentionBlock(Layer):
         X = jnp.matmul(x, self.W_proj.T)
         Q, K, V = jnp.array_split(X, 3, axis=-1)
         output, weights = attention(Q, K, V)
-
         return jnp.matmul(output, self.out_proj.T)
 
     @classmethod
@@ -209,10 +208,12 @@ class SimpleSelfAttentionBlock(Layer):
         key, *subkeys = jax.random.split(key, 4)
 
         init_fn = kaiming_init
-
         W_proj = init_fn(subkeys[0], shape=(3 * input_dim, input_dim))
+        out_proj = init_fn(subkeys[1], shape=(input_dim, input_dim))
+        return key, cls(W_proj, out_proj)
 
-        return key, cls(W_proj)
+    def tree_flatten(self):
+        return ((self.W_proj, self.out_proj), None)
 
 
 @layer
@@ -225,10 +226,14 @@ class LayerNorm(Layer):
 
     @classmethod
     def initialize(cls, key, input_dim):
+        # Intialize to no change
+        gain = jnp.ones(shape=(input_dim,))
         bias = jnp.zeros(shape=(input_dim,))
-        gain = jnp.zeroes(shape=(input_dim,))
 
-        return key, cls(W_k, W_v, W_q)
+        return key, cls(gain, bias)
+
+    def tree_flatten(self):
+        return ((self.gain, self.bias), None)
 
 
 @layer
@@ -249,9 +254,12 @@ class SimpleTransformerBlock(Layer):
         key, ln_1 = LayerNorm.initialize(key, input_dim)
         key, ln_2 = LayerNorm.initialize(key, input_dim)
 
-        return key, cls(attn_block, mlp)
+        return key, cls(attn_block, mlp, ln_1, ln_2)
 
     def __call__(self, x):
         x = self.ln_1(x + self.attn_block(x))
         x = self.ln_2(x + self.mlp(x))
         return x
+
+    def tree_flatten(self):
+        return ((self.attn_block, self.mlp, self.ln_1, self.ln_2), None)

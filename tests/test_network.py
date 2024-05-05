@@ -5,7 +5,14 @@ import torch.nn as nn
 import numpy as np
 import jax.numpy as jnp
 
-from grox.network import Affine, SimpleSelfAttentionBlock, SimpleTransformerBlock, LayerNorm, Sequential, Linear
+from grox.network import (
+    Affine,
+    SimpleSelfAttentionBlock,
+    SimpleTransformerBlock,
+    LayerNorm,
+    Sequential,
+    Linear,
+)
 
 ATOL = 1e-6
 
@@ -69,7 +76,8 @@ def test_attention_block():
 
     assert np.allclose(out_grox, out_torch, atol=ATOL)
 
-def test_transformer_block():
+
+def test_simple_transformer_block():
     embed_dim = 8
     X = np.random.normal(size=(2, 2, embed_dim))
 
@@ -80,7 +88,7 @@ def test_transformer_block():
     lW2 = np.random.normal(size=(embed_dim, 3 * embed_dim))
 
     gain_1 = np.random.normal(size=(embed_dim,))
-    gain_2 = np.random.normal(size=(embed_dim, ))
+    gain_2 = np.random.normal(size=(embed_dim,))
 
     X_torch = torch.tensor(X, dtype=torch.float32)
 
@@ -93,7 +101,16 @@ def test_transformer_block():
     gain_1_torch = torch.tensor(gain_1, dtype=torch.float32)
     gain_2_torch = torch.tensor(gain_2, dtype=torch.float32)
 
-    fn = nn.TransformerEncoderLayer(embed_dim, 1, dim_feedforward=32, dropout=0.0, batch_first=True, bias=False, dtype=torch.float32, norm_first=False)
+    fn = nn.TransformerEncoderLayer(
+        embed_dim,
+        1,
+        dim_feedforward=32,
+        dropout=0.0,
+        batch_first=True,
+        bias=False,
+        dtype=torch.float32,
+        norm_first=False,
+    )
 
     fn.self_attn.in_proj_weight = nn.Parameter(W_torch)
     fn.self_attn.out_proj.weight = nn.Parameter(W2_torch)
@@ -128,6 +145,5 @@ def test_transformer_block():
 
     block_grox = SimpleTransformerBlock(attn_grox, mlp, norm1, norm2)
     out_grox = block_grox(X_jax)
-    
-    assert np.allclose(out_grox, out_torch, atol=ATOL)
 
+    assert np.allclose(out_grox, out_torch, atol=ATOL)
