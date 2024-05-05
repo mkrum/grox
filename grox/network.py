@@ -6,7 +6,7 @@ import jax.random
 import jax.numpy as jnp
 from jax.tree_util import register_pytree_node_class
 
-from grox.nn import affine
+from grox.nn import attention
 
 
 def xavier_init(key, shape):
@@ -74,14 +74,14 @@ class EmbeddingMatrix(Layer):
 
 
 @layer
-class Linear(Layer):
+class Affine(Layer):
     w: jnp.array
     b: jnp.array
     act_fn: Any
 
     @jax.jit
     def __call__(self, x):
-        h = affine(x, self.w, self.b)
+        h = jnp.matmul(x, self.w.T) + self.b
         return self.act_fn(h)
 
     @classmethod
@@ -93,19 +93,59 @@ class Linear(Layer):
         elif init_type == "xavier":
             init_fn = xavier_init
         elif init_type == "kaiming":
-            init_fn = xavier_init
+            init_fn = kaiming_init
         else:
             raise ValueError(
-                f"Intializatoin {init_type} not one of: normal, xavier, kaiming"
+                f"Initialization {init_type} not one of: normal, xavier, kaiming"
             )
 
         key, subkey = jax.random.split(key, 2)
-        weights = init_fn(subkey, shape=(input_dim, output_dim))
+        weights = init_fn(subkey, shape=(output_dim, input_dim))
+
+        # Initialize the bias at 0?
         bias = jnp.zeros(shape=(output_dim,))
         return key, cls(weights, bias, act)
 
     def tree_flatten(self):
         return ((self.w, self.b), self.act_fn)
+
+    @classmethod
+    def tree_unflatten(cls, aux_data, children):
+        return cls(*children, aux_data)
+
+
+@layer
+class Linear(Layer):
+    w: jnp.array
+    act_fn: Any
+
+    @jax.jit
+    def __call__(self, x):
+        h = jnp.matmul(x, self.w)
+        return self.act_fn(h)
+
+    @classmethod
+    def initialize(cls, key, input_dim, output_dim, act, init_type="normal"):
+        init_fn = None
+
+        if init_type == "normal":
+            init_fn = jax.random.normal
+        elif init_type == "xavier":
+            init_fn = xavier_init
+        elif init_type == "kaiming":
+            init_fn = kaiming_init
+        else:
+            raise ValueError(
+                f"Initialization {init_type} not one of: normal, xavier, kaiming"
+            )
+
+        key, subkey = jax.random.split(key, 2)
+        weights = init_fn(subkey, shape=(input_dim, output_dim))
+
+        return key, cls(weights, act)
+
+    def tree_flatten(self):
+        return ((self.w,), self.act_fn)
 
     @classmethod
     def tree_unflatten(cls, aux_data, children):
@@ -128,33 +168,94 @@ class Sequential(Layer):
 
 @layer
 class SimpleMLP(Layer):
-    embedding: EmbeddingMatrix
     ffn_layers: Sequential
 
+    def __call__(self, x):
+        return self.ffn_layers(x)
+
     @classmethod
-    def initialize(cls, key, num_tokens, dim_list, act_fn):
-        assert dim_list[0] % 2 == 0
-
-        key, embed_layer = EmbeddingMatrix.initialize(key, num_tokens, dim_list[0] // 2)
-
+    def initialize(cls, key, dim_list, act_fn=jnp.tanh, init_type="kaiming"):
         layers = []
         for idx in range(len(dim_list) - 1):
             if idx == len(dim_list) - 2:
                 act_fn = lambda x: x
 
             key, layer = Linear.initialize(
-                key, dim_list[idx], dim_list[idx + 1], act_fn, init_type="kaiming"
+                key, dim_list[idx], dim_list[idx + 1], act_fn, init_type=init_type
             )
             layers.append(layer)
 
         mlp = Sequential(layers)
-        return key, cls(embed_layer, mlp)
-
-    def __call__(self, data):
-        left_embed = self.embedding(data[:, 0])
-        right_embed = self.embedding(data[:, 1])
-        embeded = jnp.concatenate([left_embed, right_embed], axis=1)
-        return self.ffn_layers(embeded)
+        return key, cls(mlp)
 
     def tree_flatten(self):
-        return ((self.embedding, self.ffn_layers), None)
+        return ((self.ffn_layers), None)
+
+
+@layer
+class SimpleSelfAttentionBlock(Layer):
+    W_k: Any
+    W_v: Any
+    W_q: Any
+
+    def __call__(self, x):
+        K = jnp.matmul(x, self.W_k)
+        V = jnp.matmul(x, self.W_v)
+        Q = jnp.matmul(x, self.W_q)
+
+        output = attention(Q, K, V)
+        return output
+
+    @classmethod
+    def initialize(cls, key, input_dim):
+        key, *subkeys = jax.random.split(key, 4)
+
+        init_fn = kaiming_init
+
+        W_k = init_fn(subkeys[0], shape=(input_dim, input_dim))
+        W_v = init_fn(subkeys[1], shape=(input_dim, input_dim))
+        W_q = init_fn(subkeys[1], shape=(input_dim, input_dim))
+
+        return key, cls(W_k, W_v, W_q)
+
+
+@layer
+class LayerNorm(Layer):
+    bias: jnp.array
+    gain: jnp.array
+
+    def __call__(self, x):
+        return layer_norm(x, gain, bias)
+
+    @classmethod
+    def initialize(cls, key, input_dim):
+        bias = jnp.zeros(shape=(input_dim,))
+        gain = jnp.zeroes(shape=(input_dim,))
+
+        return key, cls(W_k, W_v, W_q)
+
+
+@layer
+class SimpleTransformerBlock(Layer):
+    attn_block: SimpleSelfAttentionBlock
+    mlp: SimpleMLP
+    ln_1: LayerNorm
+    ln_2: LayerNorm
+
+    @classmethod
+    def initialize(cls, key, input_dim, expanse_ratio):
+        key, *subkeys = jax.random.split(key, 4)
+
+        key, attn_block = SimpleSelfAttentionBlock.initialize(key, input_dim)
+        key, mlp = SimpleMLP.initialize(
+            key, [input_dim, int(expanse_ratio * input_dim), input_dim]
+        )
+        key, ln_1 = LayerNorm.initialize(key, input_dim)
+        key, ln_2 = LayerNorm.initialize(key, input_dim)
+
+        return key, cls(attn_block, mlp)
+
+    def __call__(self, x):
+        x = self.ln_1(x + self.attn_block(x))
+        x = self.ln_2(x + self.mlp(x))
+        return x

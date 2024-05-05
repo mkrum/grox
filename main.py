@@ -13,8 +13,31 @@ import jax.random
 from jax import Array
 from jax.typing import ArrayLike
 
-from grox.network import SimpleMLP
+from grox.network import SimpleMLP, EmbeddingMatrix, layer
 from grox.nn import softmax
+
+
+@layer
+class MLPModel(Layer):
+    embedding: EmbeddingMatrix
+    ffn_layers: mlp
+
+    @classmethod
+    def initialize(cls, key, num_tokens, dim_list, act_fn):
+        assert dim_list[0] % 2 == 0
+
+        key, embed_layer = EmbeddingMatrix.initialize(key, num_tokens, dim_list[0] // 2)
+        key, mlp = MLPModel.initialize(key, dim_list, act_fn)
+        return key, cls(embed_layer, mlp)
+
+    def __call__(self, data):
+        left_embed = self.embedding(data[:, 0])
+        right_embed = self.embedding(data[:, 1])
+        embeded = jnp.concatenate([left_embed, right_embed], axis=1)
+        return self.ffn_layers(embeded)
+
+    def tree_flatten(self):
+        return ((self.embedding, self.ffn_layers), None)
 
 
 def batch_iterator(array: ArrayLike, batchsize: int) -> Iterator[ArrayLike]:
@@ -35,13 +58,13 @@ def nll_loss(probs: ArrayLike, target: ArrayLike) -> Array:
     return -1.0 * ll
 
 
-def compute_loss(mlp: SimpleMLP, data: ArrayLike, target: ArrayLike) -> Array:
+def compute_loss(mlp: MLPModel, data: ArrayLike, target: ArrayLike) -> Array:
     probs = softmax(mlp(data))
     loss_value = nll_loss(probs, target)
     return loss_value
 
 
-def compute_acc(mlp: SimpleMLP, data: ArrayLike, target: ArrayLike) -> Array:
+def compute_acc(mlp: MLPModel, data: ArrayLike, target: ArrayLike) -> Array:
     logits = mlp(data)
     probs = softmax(logits)
     preds = jnp.argmax(probs, axis=1)
@@ -73,7 +96,7 @@ key, subkey = jax.random.split(key)
 
 hidden_dims = [32, 32, 32, 32, max_value]
 
-key, mlp = SimpleMLP.initialize(key, max_value, hidden_dims, jnp.tanh)
+key, mlp = MLPModel.initialize(key, max_value, hidden_dims, jnp.tanh)
 
 grad_fn = jax.value_and_grad(compute_loss, argnums=0)
 
