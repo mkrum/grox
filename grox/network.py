@@ -81,7 +81,7 @@ class Affine(Layer):
 
     @jax.jit
     def __call__(self, x):
-        h = jnp.matmul(x, self.w.T) + self.b
+        h = self.w @ x + self.b
         return self.act_fn(h)
 
     @classmethod
@@ -121,7 +121,7 @@ class Linear(Layer):
 
     @jax.jit
     def __call__(self, x):
-        h = jnp.matmul(x, self.w.T)
+        h = self.w @ x 
         return self.act_fn(h)
 
     @classmethod
@@ -174,7 +174,7 @@ class SimpleMLP(Layer):
         return self.ffn_layers(x)
 
     @classmethod
-    def initialize(cls, key, dim_list, act_fn=jnp.tanh, init_type="xavier"):
+    def initialize(cls, key, dim_list, act_fn=jax.nn.relu, init_type="xavier"):
         layers = []
         for idx in range(len(dim_list) - 1):
             if idx == len(dim_list) - 2:

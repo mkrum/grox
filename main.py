@@ -31,9 +31,9 @@ class MLPModel(Layer):
     ffn_layers: SimpleMLP
 
     def __call__(self, data):
-        left_embed = self.embedding(data[:, 0])
-        right_embed = self.embedding(data[:, 1])
-        embeded = jnp.concatenate([left_embed, right_embed], axis=1)
+        left_embed = self.embedding(data[0])
+        right_embed = self.embedding(data[1])
+        embeded = jnp.concatenate([left_embed, right_embed], axis=0)
         return self.ffn_layers(embeded)
 
     @classmethod
@@ -82,15 +82,21 @@ class TransformerModel(Layer):
         return ((self.embedding, self.transformer_layers, self.output_proj), None)
 
 
-def batch_iterator(array: ArrayLike, batchsize: int) -> Iterator[ArrayLike]:
+def batch_iterator(array: ArrayLike, batchsize: int, drop_last: bool = False) -> Iterator[ArrayLike]:
     total = len(array)
     steps = total // batchsize
     actual_total = steps * batchsize
 
-    for idx in range(0, actual_total, batchsize):
+    if drop_last:
+        total = actual_total
+
+    for idx in range(0, total, batchsize):
+
         data = array[idx : idx + batchsize]
+
         inputs = data[:, :2]
         targets = data[:, 3]
+
         yield (inputs, targets)
 
 
@@ -101,13 +107,14 @@ def nll_loss(probs: ArrayLike, target: ArrayLike) -> Array:
 
 
 def compute_loss(mlp: MLPModel, data: ArrayLike, target: ArrayLike) -> Array:
-    probs = softmax(mlp(data))
+    logits = jax.vmap(mlp)(data)
+    probs = softmax(logits)
     loss_value = nll_loss(probs, target)
     return loss_value
 
 
 def compute_acc(mlp: MLPModel, data: ArrayLike, target: ArrayLike) -> Array:
-    logits = mlp(data)
+    logits = jax.vmap(mlp)(data)
     probs = softmax(logits)
     preds = jnp.argmax(probs, axis=1)
     return preds == target
@@ -130,8 +137,8 @@ def create_dataset(train_percent: float, max_value: int, fn) -> ArrayLike:
 
 
 if __name__ == "__main__":
-    max_value = 97
-    train_data, test_data = create_dataset(0.99, max_value, lambda x, y: (x + y) % max_value)
+    max_value = 7
+    train_data, _ = create_dataset(0.99, max_value, lambda x, y: (x + y) % max_value)
 
     seed = 123
     key = jax.random.key(seed)
@@ -143,7 +150,7 @@ if __name__ == "__main__":
     model = None
     if model_type == "mlp":
 
-        hidden_dims = [32, 32, 32, 32, max_value]
+        hidden_dims = [128] * 3
         key, model = MLPModel.initialize(key, max_value, hidden_dims, jnp.tanh)
 
     elif model_type == "transformer":
@@ -151,16 +158,16 @@ if __name__ == "__main__":
 
     grad_fn = jax.value_and_grad(compute_loss, argnums=0)
 
-    lr = 0.01
+    lr = 0.1
 
     loss_hist = deque(maxlen=10)
 
-    for epoch in range(10):
+    for epoch in range(100):
         key, subkey = jax.random.split(key)
-        jax.random.permutation(subkey, train_data)
+        train_data = jax.random.permutation(subkey, train_data)
 
         progress_bar = tqdm.tqdm(
-            batch_iterator(train_data, 32), total=len(train_data) // 32
+            batch_iterator(train_data, 32, drop_last=True), total=len(train_data) // 32, 
         )
 
         for data, target in progress_bar:
@@ -172,18 +179,27 @@ if __name__ == "__main__":
             progress_bar.set_description(f"Loss: {np.mean(loss_hist):.2f}")
 
         correct = []
-        sample = 10
         for idx, (data, target) in enumerate(batch_iterator(train_data, 8)):
             is_correct = compute_acc(model, data, target)
             correct.append(is_correct)
 
-            if idx < sample:
-                logits = model(data)
-                probs = softmax(logits)
-                preds = jnp.argmax(probs, axis=1)
-                print(preds)
-                print(target)
-                print()
+        correct = jnp.concatenate(correct)
+        acc = 100.0 * correct.mean()
+        print(f"Epoch {epoch + 1} Test Acc: {acc:.2f}%")
+        
+        correct = []
+        for idx, (data, target) in enumerate(batch_iterator(train_data, 16)):
+            is_correct = compute_acc(model, data, target)
+            correct.append(is_correct)
+
+        correct = jnp.concatenate(correct)
+        acc = 100.0 * correct.mean()
+        print(f"Epoch {epoch + 1} Test Acc: {acc:.2f}%")
+
+        correct = []
+        for idx, (data, target) in enumerate(batch_iterator(train_data, 32)):
+            is_correct = compute_acc(model, data, target)
+            correct.append(is_correct)
 
         correct = jnp.concatenate(correct)
         acc = 100.0 * correct.mean()
