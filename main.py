@@ -11,7 +11,7 @@ from jax.tree_util import register_pytree_node_class
 import jax.numpy as jnp
 import jax.random
 from jax import Array
-from jax.typing import ArrayLike
+from jaxtyping import ArrayLike
 
 from grox.network import (
     SimpleMLP,
@@ -130,7 +130,7 @@ def create_dataset(train_percent: float, max_value: int, fn) -> ArrayLike:
 
 if __name__ == "__main__":
     max_value = 97
-    train_data, test_data = create_dataset(0.99, max_value, lambda x, y: x)
+    train_data, test_data = create_dataset(0.99, max_value, lambda x, y: (x + y) % max_value)
 
     seed = 123
     key = jax.random.key(seed)
@@ -148,7 +148,7 @@ if __name__ == "__main__":
 
     grad_fn = jax.value_and_grad(compute_loss, argnums=0)
 
-    lr = 0.1
+    lr = 0.001
 
     loss_hist = deque(maxlen=10)
 
@@ -162,7 +162,7 @@ if __name__ == "__main__":
 
         for data, target in progress_bar:
             loss_value, grads = grad_fn(model, data, target)
-            model = jax.tree_map(lambda p, g: p - lr * g, model, grads)
+            model = jax.tree.map(lambda p, g: p - lr * g, model, grads)
 
             loss_hist.append(loss_value)
 

@@ -1,7 +1,7 @@
 import jax
 from jax import Array
 import numpy as np
-from jax.typing import ArrayLike
+from jaxtyping import ArrayLike
 import jax.numpy as jnp
 
 
