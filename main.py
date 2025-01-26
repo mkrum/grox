@@ -114,6 +114,7 @@ def compute_acc(mlp: MLPModel, data: ArrayLike, target: ArrayLike) -> Array:
 
 
 def create_dataset(train_percent: float, max_value: int, fn) -> ArrayLike:
+
     nums = list(range(0, max_value))
     combos = list(itertools.product(nums, nums))
     data = list(map(lambda x: (*x, fn(*x)), combos))
@@ -141,14 +142,16 @@ if __name__ == "__main__":
 
     model = None
     if model_type == "mlp":
+
         hidden_dims = [32, 32, 32, 32, max_value]
         key, model = MLPModel.initialize(key, max_value, hidden_dims, jnp.tanh)
+
     elif model_type == "transformer":
         key, model = TransformerModel.initialize(key, max_value, 32, 2)
 
     grad_fn = jax.value_and_grad(compute_loss, argnums=0)
 
-    lr = 0.001
+    lr = 0.01
 
     loss_hist = deque(maxlen=10)
 
@@ -169,9 +172,18 @@ if __name__ == "__main__":
             progress_bar.set_description(f"Loss: {np.mean(loss_hist):.2f}")
 
         correct = []
-        for data, target in batch_iterator(test_data, 8):
+        sample = 10
+        for idx, (data, target) in enumerate(batch_iterator(train_data, 8)):
             is_correct = compute_acc(model, data, target)
             correct.append(is_correct)
+
+            if idx < sample:
+                logits = model(data)
+                probs = softmax(logits)
+                preds = jnp.argmax(probs, axis=1)
+                print(preds)
+                print(target)
+                print()
 
         correct = jnp.concatenate(correct)
         acc = 100.0 * correct.mean()
