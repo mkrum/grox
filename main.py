@@ -137,20 +137,20 @@ def create_dataset(train_percent: float, max_value: int, fn) -> ArrayLike:
 
 
 if __name__ == "__main__":
-    max_value = 7
-    train_data, _ = create_dataset(0.99, max_value, lambda x, y: (x + y) % max_value)
+    max_value = 512
+    train_data, test_data = create_dataset(0.99, max_value, lambda x, y: (x + y) % max_value)
 
     seed = 123
     key = jax.random.key(seed)
 
     key, subkey = jax.random.split(key)
 
-    model_type = "transformer"
+    model_type = "mlp"
 
     model = None
     if model_type == "mlp":
 
-        hidden_dims = [128] * 3
+        hidden_dims = [256] * 3 + [max_value]
         key, model = MLPModel.initialize(key, max_value, hidden_dims, jnp.tanh)
 
     elif model_type == "transformer":
@@ -158,16 +158,16 @@ if __name__ == "__main__":
 
     grad_fn = jax.value_and_grad(compute_loss, argnums=0)
 
-    lr = 0.1
+    lr = 0.001
 
-    loss_hist = deque(maxlen=10)
+    loss_hist = deque(maxlen=32)
 
     for epoch in range(100):
         key, subkey = jax.random.split(key)
         train_data = jax.random.permutation(subkey, train_data)
 
         progress_bar = tqdm.tqdm(
-            batch_iterator(train_data, 32, drop_last=True), total=len(train_data) // 32, 
+            batch_iterator(train_data, 256, drop_last=True), total=len(train_data) // 256,   
         )
 
         for data, target in progress_bar:
@@ -179,25 +179,16 @@ if __name__ == "__main__":
             progress_bar.set_description(f"Loss: {np.mean(loss_hist):.2f}")
 
         correct = []
-        for idx, (data, target) in enumerate(batch_iterator(train_data, 8)):
+        for idx, (data, target) in enumerate(batch_iterator(train_data, 256)):
             is_correct = compute_acc(model, data, target)
             correct.append(is_correct)
 
         correct = jnp.concatenate(correct)
         acc = 100.0 * correct.mean()
-        print(f"Epoch {epoch + 1} Test Acc: {acc:.2f}%")
-        
-        correct = []
-        for idx, (data, target) in enumerate(batch_iterator(train_data, 16)):
-            is_correct = compute_acc(model, data, target)
-            correct.append(is_correct)
-
-        correct = jnp.concatenate(correct)
-        acc = 100.0 * correct.mean()
-        print(f"Epoch {epoch + 1} Test Acc: {acc:.2f}%")
+        print(f"Epoch {epoch + 1} Train Acc: {acc:.2f}%")
 
         correct = []
-        for idx, (data, target) in enumerate(batch_iterator(train_data, 32)):
+        for idx, (data, target) in enumerate(batch_iterator(test_data, 256)):
             is_correct = compute_acc(model, data, target)
             correct.append(is_correct)
 
